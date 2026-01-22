@@ -1,0 +1,22 @@
+export:
+  delimiter: ","
+  decimal: "."
+
+database:
+  sqltype: sqlite
+  client:
+  user_name:
+  password:
+  host: localhost
+  port: 5432
+  db_name: ExampleDB
+
+query_options:
+  table_name: HistoricRate
+  query_everything: true # if true, all filters below are ignored
+  from_timestamp: null
+  to_timestamp: null
+  exchanges: all
+  currency_pairs: eth-btc
+  first_currencies:
+  second_currencies:

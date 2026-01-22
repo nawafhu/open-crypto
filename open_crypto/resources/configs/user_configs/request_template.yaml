@@ -1,0 +1,28 @@
+general:
+  database:
+    sqltype: sqlite # sqlite, mariadb, mysql or postgresql
+    client: null # pymysql or psycopg2
+    user_name:
+    password:
+    host: localhost
+    port: 5432
+    db_name: ExampleDB
+
+  operation_settings:
+    frequency: once  # once or any number in minutes
+    interval: days  # minutes, hours, days, weeks, months
+    timeout: 10  # any number in seconds
+    enable_logging: true
+    asynchronously: true  # run requests in parallel or iterate over the currency-pairs
+
+jobs:
+  JobName:
+    request_method: historic_rates # historic_rates, trades, order_books, tickers
+    update_cp: false
+    excluded: null  # comma-separated list of exchange names
+    exchanges: binance # all or an comma-separated list of exchange names
+    currency_pairs: btc-usd # all or an comma-separated list of pairs (e.g. eth-btc, btc-usd,..)
+    first_currencies: null  # comma-separated list of currencies (e.g. eth, btc,...)
+    second_currencies: null
+
+
