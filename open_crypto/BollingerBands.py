@@ -2,17 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-EMA Backtest Tool
+Bollinger Bands Backtest Tool
 
 - lädt historic_rates_view aus SQLite
-- Nutzer wählt EMA-Periode (z.B. 12, 50, 200)
-- Signal:
-    pred_up = 1 wenn close > EMA
-- Wahrheit:
+- Nutzer wählt Periode und Standardabweichung
+- Bollinger Bands werden berechnet
+
+Signal:
+    pred_up = 1 wenn close < lower_band
+
+Wahrheit:
     direction = 1 wenn close[t+1] > close[t]
-- bewertet Prognose
-- exportiert Excel:
-    Sheet: ema_backtest
+
+Export:
+    Sheet: bollinger_backtest
     Sheet: metrics
 """
 
@@ -40,6 +43,19 @@ def time_to_datetime(time_series: pd.Series) -> pd.Series:
 
 
 # --------------------------------------------------
+# Bollinger Bands berechnen
+# --------------------------------------------------
+def compute_bollinger(close: pd.Series, period: int = 20, std_mult: float = 2.0):
+    sma = close.rolling(window=period).mean()
+    std = close.rolling(window=period).std()
+
+    upper = sma + std_mult * std
+    lower = sma - std_mult * std
+
+    return sma, upper, lower
+
+
+# --------------------------------------------------
 # Confusion Matrix
 # --------------------------------------------------
 def confusion_counts(y_true, y_pred):
@@ -58,7 +74,8 @@ def safe_div(a, b):
 # Hauptprogramm
 # --------------------------------------------------
 def main():
-    print("=== EMA Backtest Tool ===")
+
+    print("=== Bollinger Bands Tool ===")
 
     base_dir = Path(__file__).resolve().parent
     db_files = sorted(base_dir.glob("*.db"))
@@ -80,20 +97,21 @@ def main():
         return
 
     try:
-        ema_period = int(input("EMA-Periode (z.B. 12, 50, 200): "))
-        if ema_period < 2:
-            raise ValueError
+        period = int(input("Bollinger Periode (z.B. 20): "))
+        std_mult = float(input("Standardabweichung (z.B. 2): "))
     except ValueError:
-        print("Ungültige EMA-Periode.")
+        print("Ungültige Parameter.")
         return
 
     db_path = db_files[choice - 1]
+
     print(f"\nVerbinde mit: {db_path.name}")
 
     # --------------------------------------------------
     # Daten laden
     # --------------------------------------------------
     conn = sqlite3.connect(db_path)
+
     df = pd.read_sql_query(
         """
         SELECT time, close
@@ -103,9 +121,10 @@ def main():
         """,
         conn
     )
+
     conn.close()
 
-    if len(df) < ema_period + 10:
+    if len(df) < period + 10:
         print("Nicht genügend Daten.")
         return
 
@@ -114,51 +133,53 @@ def main():
     # --------------------------------------------------
     df["date"] = time_to_datetime(df["time"])
     df["date_str"] = df["date"].dt.strftime("%d.%m.%Y")
+
     df = df.sort_values("time").reset_index(drop=True)
 
     # --------------------------------------------------
-    # EMA berechnen
+    # Bollinger Bands berechnen
     # --------------------------------------------------
-    ema_col = f"EMA_{ema_period}"
-    df[ema_col] = df["close"].ewm(span=ema_period, adjust=False).mean()
+    sma, upper, lower = compute_bollinger(df["close"], period, std_mult)
+
+    df["bb_mid"] = sma
+    df["bb_upper"] = upper
+    df["bb_lower"] = lower
 
     # --------------------------------------------------
-    # Aktueller EMA-Wert + Handelsempfehlung
+    # Aktueller Wert + Empfehlung
     # --------------------------------------------------
-    last_row = df.iloc[-1]
+    last = df.iloc[-1]
 
-    current_close = float(last_row["close"])
-    current_ema = float(last_row[ema_col])
-    current_date = last_row["date_str"]
+    close = float(last["close"])
+    upper = float(last["bb_upper"])
+    lower = float(last["bb_lower"])
+    mid = float(last["bb_mid"])
 
-    print("\n=== Aktueller EMA-Wert ===")
-    print(f"Datum        : {current_date}")
-    print(f"Close        : {current_close:.6f}")
-    print(f"{ema_col:<12}: {current_ema:.6f}")
+    print("\n=== Aktuelle Bollinger Bands ===")
+    print(f"Datum        : {last['date_str']}")
+    print(f"Close        : {close:.6f}")
+    print(f"BB Upper     : {upper:.6f}")
+    print(f"BB Middle    : {mid:.6f}")
+    print(f"BB Lower     : {lower:.6f}")
 
-    if current_close > current_ema:
-        print("✅ Signal: BULLISH")
-        print("Begründung   : Der aktuelle Kurs liegt über dem EMA.")
-        print("📈 Empfehlung: KAUFEN")
-    elif current_close < current_ema:
-        print("⚠️ Signal: BEARISH")
-        print("Begründung   : Der aktuelle Kurs liegt unter dem EMA.")
-        print("📉 Empfehlung: VERKAUFEN")
+    if close < lower:
+        print("📈 Empfehlung: KAUFEN (Preis unter unterem Band)")
+    elif close > upper:
+        print("📉 Empfehlung: VERKAUFEN (Preis über oberem Band)")
     else:
-        print("➖ Signal: NEUTRAL")
-        print("Begründung   : Der aktuelle Kurs liegt genau auf dem EMA.")
-        print("🤝 Empfehlung: HALTEN")
+        print("🤝 Empfehlung: HALTEN (Preis innerhalb der Bänder)")
 
     # --------------------------------------------------
     # Ziel & Prognose
     # --------------------------------------------------
     df["direction"] = (df["close"].shift(-1) > df["close"]).astype(int)
-    df["pred_up"] = (df["close"] > df[ema_col]).astype(int)
+
+    df["pred_up"] = (df["close"] < df["bb_lower"]).astype(int)
 
     # --------------------------------------------------
     # Evaluation
     # --------------------------------------------------
-    eval_df = df.dropna(subset=[ema_col, "direction"])
+    eval_df = df.dropna(subset=["bb_lower", "direction"])
 
     y_true = eval_df["direction"].values
     y_pred = eval_df["pred_up"].values
@@ -172,27 +193,37 @@ def main():
     specificity = safe_div(tn, tn + fp)
     signal_rate = safe_div(y_pred.sum(), len(y_pred))
 
+    print("\n=== Backtest Ergebnisse ===")
+    print(f"Accuracy      : {accuracy:.4f}")
+    print(f"Precision     : {precision:.4f}")
+    print(f"Recall        : {recall:.4f}")
+    print(f"F1 Score      : {f1:.4f}")
+    print(f"Specificity   : {specificity:.4f}")
+
     # --------------------------------------------------
     # Export
     # --------------------------------------------------
     export_df = df[
-        ["time", "date_str", "close", ema_col, "direction", "pred_up"]
+        ["time", "date_str", "close", "bb_upper", "bb_mid", "bb_lower",
+         "direction", "pred_up"]
     ].sort_values("time", ascending=False)
 
     metrics_df = pd.DataFrame({
         "metric": [
-            "ema_period",
+            "period",
+            "std_multiplier",
             "rows_evaluated",
             "signal_rate",
             "accuracy",
-            "precision_up",
-            "recall_up",
-            "f1_up",
+            "precision",
+            "recall",
+            "f1",
             "specificity",
             "TN", "FP", "FN", "TP"
         ],
         "value": [
-            ema_period,
+            period,
+            std_mult,
             len(eval_df),
             signal_rate,
             accuracy,
@@ -204,9 +235,10 @@ def main():
         ]
     })
 
-    out_path = base_dir / f"{db_path.stem}_EMA{ema_period}_BACKTEST.xlsx"
+    out_path = base_dir / f"{db_path.stem}_BOLLINGER_BACKTEST.xlsx"
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        export_df.to_excel(writer, sheet_name="ema_backtest", index=False)
+        export_df.to_excel(writer, sheet_name="bollinger_backtest", index=False)
         metrics_df.to_excel(writer, sheet_name="metrics", index=False)
 
     print("\n✅ Backtest abgeschlossen")

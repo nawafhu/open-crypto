@@ -9,17 +9,14 @@ database:
   password:
   host: localhost
   port: 5432
-  db_name: ExampleDB
+  db_name: AllCoins2
 
 query_options:
   table_name: HistoricRate  # HistoricRate, Ticker, Trade, OrderBook
 
   query_everything: true # if true, all filters below are ignored and the whole table is returned
-  from_timestamp: 01-01-2020 13:20:00
-  to_timestamp:
+  exchanges: bequant
 
-  exchanges: binance
-
-  currency_pairs: btc-usd # all or an comma-separated list of pairs (e.g. eth-btc, btc-usd,..)
+  currency_pairs: all # all or an comma-separated list of pairs (e.g. eth-btc, btc-usd,..)
   first_currencies: null  # comma-separated list of currencies (e.g. eth, btc,...)
   second_currencies: null

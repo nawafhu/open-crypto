@@ -2,17 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-EMA Backtest Tool
+ATR Backtest Tool
 
 - lädt historic_rates_view aus SQLite
-- Nutzer wählt EMA-Periode (z.B. 12, 50, 200)
-- Signal:
-    pred_up = 1 wenn close > EMA
-- Wahrheit:
+- Nutzer wählt ATR-Periode
+- berechnet Average True Range (ATR)
+
+Signal:
+    pred_up = 1 wenn ATR steigt (Volatilitätsanstieg)
+
+Wahrheit:
     direction = 1 wenn close[t+1] > close[t]
-- bewertet Prognose
-- exportiert Excel:
-    Sheet: ema_backtest
+
+Export:
+    Sheet: atr_backtest
     Sheet: metrics
 """
 
@@ -40,6 +43,26 @@ def time_to_datetime(time_series: pd.Series) -> pd.Series:
 
 
 # --------------------------------------------------
+# ATR berechnen
+# --------------------------------------------------
+def compute_atr(close: pd.Series, period: int = 14):
+
+    high = close
+    low = close
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+    tr2 = abs(high - prev_close)
+    tr3 = abs(low - prev_close)
+
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = tr.rolling(window=period).mean()
+
+    return atr
+
+
+# --------------------------------------------------
 # Confusion Matrix
 # --------------------------------------------------
 def confusion_counts(y_true, y_pred):
@@ -58,7 +81,8 @@ def safe_div(a, b):
 # Hauptprogramm
 # --------------------------------------------------
 def main():
-    print("=== EMA Backtest Tool ===")
+
+    print("=== ATR Backtest Tool ===")
 
     base_dir = Path(__file__).resolve().parent
     db_files = sorted(base_dir.glob("*.db"))
@@ -80,20 +104,22 @@ def main():
         return
 
     try:
-        ema_period = int(input("EMA-Periode (z.B. 12, 50, 200): "))
-        if ema_period < 2:
+        atr_period = int(input("ATR-Periode (z.B. 14): "))
+        if atr_period < 2:
             raise ValueError
     except ValueError:
-        print("Ungültige EMA-Periode.")
+        print("Ungültige ATR-Periode.")
         return
 
     db_path = db_files[choice - 1]
+
     print(f"\nVerbinde mit: {db_path.name}")
 
     # --------------------------------------------------
     # Daten laden
     # --------------------------------------------------
     conn = sqlite3.connect(db_path)
+
     df = pd.read_sql_query(
         """
         SELECT time, close
@@ -103,9 +129,10 @@ def main():
         """,
         conn
     )
+
     conn.close()
 
-    if len(df) < ema_period + 10:
+    if len(df) < atr_period + 10:
         print("Nicht genügend Daten.")
         return
 
@@ -114,51 +141,49 @@ def main():
     # --------------------------------------------------
     df["date"] = time_to_datetime(df["time"])
     df["date_str"] = df["date"].dt.strftime("%d.%m.%Y")
+
     df = df.sort_values("time").reset_index(drop=True)
 
     # --------------------------------------------------
-    # EMA berechnen
+    # ATR berechnen
     # --------------------------------------------------
-    ema_col = f"EMA_{ema_period}"
-    df[ema_col] = df["close"].ewm(span=ema_period, adjust=False).mean()
+    atr_col = f"ATR_{atr_period}"
+
+    df[atr_col] = compute_atr(df["close"], atr_period)
 
     # --------------------------------------------------
-    # Aktueller EMA-Wert + Handelsempfehlung
+    # Aktueller ATR-Wert
     # --------------------------------------------------
-    last_row = df.iloc[-1]
+    last = df.iloc[-1]
 
-    current_close = float(last_row["close"])
-    current_ema = float(last_row[ema_col])
-    current_date = last_row["date_str"]
+    current_close = float(last["close"])
+    current_atr = float(last[atr_col])
 
-    print("\n=== Aktueller EMA-Wert ===")
-    print(f"Datum        : {current_date}")
+    print("\n=== Aktueller ATR-Wert ===")
+    print(f"Datum        : {last['date_str']}")
     print(f"Close        : {current_close:.6f}")
-    print(f"{ema_col:<12}: {current_ema:.6f}")
+    print(f"{atr_col:<12}: {current_atr:.6f}")
 
-    if current_close > current_ema:
-        print("✅ Signal: BULLISH")
-        print("Begründung   : Der aktuelle Kurs liegt über dem EMA.")
-        print("📈 Empfehlung: KAUFEN")
-    elif current_close < current_ema:
-        print("⚠️ Signal: BEARISH")
-        print("Begründung   : Der aktuelle Kurs liegt unter dem EMA.")
-        print("📉 Empfehlung: VERKAUFEN")
+    prev_atr = float(df.iloc[-2][atr_col])
+
+    if current_atr > prev_atr:
+        print("📈 Volatilität steigt → möglicher Trendbeginn")
+    elif current_atr < prev_atr:
+        print("📉 Volatilität sinkt → Markt beruhigt sich")
     else:
-        print("➖ Signal: NEUTRAL")
-        print("Begründung   : Der aktuelle Kurs liegt genau auf dem EMA.")
-        print("🤝 Empfehlung: HALTEN")
+        print("🤝 Volatilität unverändert")
 
     # --------------------------------------------------
     # Ziel & Prognose
     # --------------------------------------------------
     df["direction"] = (df["close"].shift(-1) > df["close"]).astype(int)
-    df["pred_up"] = (df["close"] > df[ema_col]).astype(int)
+
+    df["pred_up"] = (df[atr_col].diff() > 0).astype(int)
 
     # --------------------------------------------------
     # Evaluation
     # --------------------------------------------------
-    eval_df = df.dropna(subset=[ema_col, "direction"])
+    eval_df = df.dropna(subset=[atr_col, "direction"])
 
     y_true = eval_df["direction"].values
     y_pred = eval_df["pred_up"].values
@@ -172,27 +197,34 @@ def main():
     specificity = safe_div(tn, tn + fp)
     signal_rate = safe_div(y_pred.sum(), len(y_pred))
 
+    print("\n=== Backtest Ergebnisse ===")
+    print(f"Accuracy      : {accuracy:.4f}")
+    print(f"Precision     : {precision:.4f}")
+    print(f"Recall        : {recall:.4f}")
+    print(f"F1 Score      : {f1:.4f}")
+    print(f"Specificity   : {specificity:.4f}")
+
     # --------------------------------------------------
     # Export
     # --------------------------------------------------
     export_df = df[
-        ["time", "date_str", "close", ema_col, "direction", "pred_up"]
+        ["time", "date_str", "close", atr_col, "direction", "pred_up"]
     ].sort_values("time", ascending=False)
 
     metrics_df = pd.DataFrame({
         "metric": [
-            "ema_period",
+            "atr_period",
             "rows_evaluated",
             "signal_rate",
             "accuracy",
-            "precision_up",
-            "recall_up",
-            "f1_up",
+            "precision",
+            "recall",
+            "f1",
             "specificity",
             "TN", "FP", "FN", "TP"
         ],
         "value": [
-            ema_period,
+            atr_period,
             len(eval_df),
             signal_rate,
             accuracy,
@@ -204,9 +236,10 @@ def main():
         ]
     })
 
-    out_path = base_dir / f"{db_path.stem}_EMA{ema_period}_BACKTEST.xlsx"
+    out_path = base_dir / f"{db_path.stem}_ATR{atr_period}_BACKTEST.xlsx"
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        export_df.to_excel(writer, sheet_name="ema_backtest", index=False)
+        export_df.to_excel(writer, sheet_name="atr_backtest", index=False)
         metrics_df.to_excel(writer, sheet_name="metrics", index=False)
 
     print("\n✅ Backtest abgeschlossen")

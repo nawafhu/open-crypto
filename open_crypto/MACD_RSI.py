@@ -212,6 +212,35 @@ def main():
     rsi_col = f"RSI_{rsi_period}"
     df[rsi_col] = compute_rsi_sma(df["close"], period=rsi_period)
 
+        # Aktuelle Werte + Empfehlung
+    last_row = df.iloc[-1]
+    current_macd = float(last_row["macd"])
+    current_signal = float(last_row["signal"])
+    current_hist = float(last_row["hist"])
+    current_rsi = float(last_row[rsi_col])
+    current_close = float(last_row["close"])
+
+    print("\n=== Aktuelle Indikatorwerte ===")
+    print(f"Datum        : {last_row['date_str']}")
+    print(f"Close        : {current_close:.6f}")
+    print(f"MACD         : {current_macd:.6f}")
+    print(f"Signal-Linie : {current_signal:.6f}")
+    print(f"Histogramm   : {current_hist:.6f}")
+    print(f"{rsi_col:<13}: {current_rsi:.2f}")
+
+    if current_macd > current_signal and current_rsi < rsi_buy:
+        print("✅ Signal: BULLISH")
+        print("Begründung   : MACD > Signal und RSI unter Kauf-Schwelle.")
+        print("📈 Empfehlung: KAUFEN")
+    elif current_macd < current_signal:
+        print("⚠️ Signal: BEARISH")
+        print("Begründung   : MACD liegt unter der Signallinie.")
+        print("📉 Empfehlung: VERKAUFEN")
+    else:
+        print("➖ Signal: UNEINDEUTIG")
+        print("Begründung   : MACD zwar nicht bearish genug für Verkauf, aber kein vollständiges Kaufsignal.")
+        print("🤝 Empfehlung: HALTEN")
+
     # Wahrheit (morgen höher?)
     df["direction"] = (df["close"].shift(-1) > df["close"]).astype(int)
 
